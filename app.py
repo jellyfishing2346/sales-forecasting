@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from src.data_loader import load_data
+import numpy as np
 
 st.title('Sales Forecasting App')
 
@@ -13,6 +14,39 @@ if uploaded_file:
     st.write('Data Shape:', df.shape)
     st.write('Columns:', df.columns.tolist())
     st.write('Missing Values:', df.isnull().sum())
+
+    # --- Flexible column selection for different CSVs (optional columns) ---
+    st.subheader('Column Mapping')
+    columns = df.columns.tolist()
+    date_col = st.selectbox('Select the Date column', columns, index=columns.index('Date') if 'Date' in columns else 0)
+    sales_col = st.selectbox('Select the Sales Volume column', columns, index=columns.index('Sales_Volume') if 'Sales_Volume' in columns else 0)
+    # Optional columns
+    category_col = st.selectbox('Select the Product Category column (optional)', ['None'] + columns, index=(columns.index('Product_Category')+1) if 'Product_Category' in columns else 0)
+    location_col = st.selectbox('Select the Store Location column (optional)', ['None'] + columns, index=(columns.index('Store_Location')+1) if 'Store_Location' in columns else 0)
+
+    # Rename columns for internal consistency
+    rename_dict = {date_col: 'Date', sales_col: 'Sales_Volume'}
+    if category_col != 'None':
+        rename_dict[category_col] = 'Product_Category'
+    if location_col != 'None':
+        rename_dict[location_col] = 'Store_Location'
+    df = df.rename(columns=rename_dict)
+
+    # Show column mapping preview before continuing
+    st.info(f"Column mapping: Date → '{date_col}', Sales Volume → '{sales_col}', Product Category → '{category_col if category_col != 'None' else 'N/A'}', Store Location → '{location_col if location_col != 'None' else 'N/A'}'")
+
+    # Check for required columns
+    required = ['Date', 'Sales_Volume']
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        st.error(f"Missing required columns: {', '.join(missing)}. Please check your file and column selections.\n\nColumns in your file: {', '.join(df.columns)}")
+        st.stop()
+
+    # Fill missing optional columns with default values if not present
+    if 'Product_Category' not in df.columns:
+        df['Product_Category'] = 'Unknown'
+    if 'Store_Location' not in df.columns:
+        df['Store_Location'] = 'Unknown'
 
     st.subheader('Sales Volume Over Time')
     fig, ax = plt.subplots()
@@ -39,13 +73,35 @@ if uploaded_file:
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import mean_absolute_error
 
-    # Feature engineering: use numeric/categorical features
+    # --- Feature engineering: add advanced features ---
     df_feat = df.copy()
     df_feat['Date'] = pd.to_datetime(df_feat['Date'])
+    df_feat = df_feat.sort_values('Date')
+    # Lag features
+    df_feat['Sales_Lag_1'] = df_feat['Sales_Volume'].shift(1)
+    df_feat['Sales_Lag_3'] = df_feat['Sales_Volume'].shift(3)
+    df_feat['Sales_Lag_7'] = df_feat['Sales_Volume'].shift(7)
+    df_feat['Sales_Lag_14'] = df_feat['Sales_Volume'].shift(14)
+    # Rolling statistics
+    df_feat['Sales_Rolling_7_mean'] = df_feat['Sales_Volume'].rolling(window=7).mean()
+    df_feat['Sales_Rolling_7_std'] = df_feat['Sales_Volume'].rolling(window=7).std()
+    df_feat['Sales_Rolling_7_min'] = df_feat['Sales_Volume'].rolling(window=7).min()
+    df_feat['Sales_Rolling_7_max'] = df_feat['Sales_Volume'].rolling(window=7).max()
+    # Cumulative sum (year-to-date)
     df_feat['Year'] = df_feat['Date'].dt.year
+    df_feat['YTD_Sales'] = df_feat.groupby('Year')['Sales_Volume'].cumsum()
+    # Date features
     df_feat['Month'] = df_feat['Date'].dt.month
     df_feat['Day'] = df_feat['Date'].dt.day
+    df_feat['Is_Weekend'] = df_feat['Date'].dt.weekday >= 5
+    df_feat['Is_Month_Start'] = df_feat['Date'].dt.is_month_start
+    df_feat['Is_Month_End'] = df_feat['Date'].dt.is_month_end
+    # Interaction features
+    df_feat['Promo_x_Price'] = df_feat['Promotion'] * df_feat['Price']
+    df_feat['Promo_x_Store_Urban'] = df_feat['Promotion'] * (df_feat['Store_Location'] == 'Urban').astype(int)
+    # Categorical dummies
     df_feat = pd.get_dummies(df_feat, columns=['Product_Category', 'Store_Location'], drop_first=True)
+    df_feat = df_feat.dropna()  # Drop rows with NaN from lag/rolling
 
     X = df_feat.drop(['Sales_Volume', 'Date'], axis=1)
     y = df_feat['Sales_Volume']
@@ -57,19 +113,91 @@ if uploaded_file:
     mae = mean_absolute_error(y_test, y_pred)
     st.write(f'Mean Absolute Error on Test Set: {mae:.2f}')
 
-    # Simple future forecast: predict for next N days
+    # --- Future forecast with advanced features ---
     st.subheader('Forecast Future Sales')
     forecast_days = st.slider('Select forecast horizon (days)', 1, 30, 7)
-    last_row = df_feat.iloc[-1:]
-    future_dates = pd.date_range(df_feat['Date'].max() + pd.Timedelta(days=1), periods=forecast_days)
-    future_df = pd.DataFrame({
-        'Year': future_dates.year,
-        'Month': future_dates.month,
-        'Day': future_dates.day
-    })
-    # Use last known values for categorical features
-    for col in X.columns:
-        if col not in future_df.columns:
-            future_df[col] = last_row[col].values[0]
-    future_pred = model.predict(future_df[X.columns])
-    st.line_chart(pd.DataFrame({'Date': future_dates, 'Forecasted_Sales': future_pred}).set_index('Date'))
+    last_rows = df_feat.iloc[-14:].copy()  # For lags/rolling
+    future_preds = []
+    future_dates = []
+    for i in range(forecast_days):
+        next_date = last_rows['Date'].max() + pd.Timedelta(days=1)
+        row = last_rows.iloc[-1:].copy()
+        row['Date'] = next_date
+        row['Year'] = next_date.year
+        row['Month'] = next_date.month
+        row['Day'] = next_date.day
+        row['Is_Weekend'] = next_date.weekday() >= 5
+        row['Is_Month_Start'] = next_date.is_month_start
+        row['Is_Month_End'] = next_date.is_month_end
+        # Lag features
+        row['Sales_Lag_1'] = last_rows['Sales_Volume'].iloc[-1]
+        row['Sales_Lag_3'] = last_rows['Sales_Volume'].iloc[-3] if len(last_rows) >= 3 else last_rows['Sales_Volume'].iloc[0]
+        row['Sales_Lag_7'] = last_rows['Sales_Volume'].iloc[-7] if len(last_rows) >= 7 else last_rows['Sales_Volume'].iloc[0]
+        row['Sales_Lag_14'] = last_rows['Sales_Volume'].iloc[0]
+        # Rolling stats
+        row['Sales_Rolling_7_mean'] = last_rows['Sales_Volume'].rolling(window=7).mean().iloc[-1]
+        row['Sales_Rolling_7_std'] = last_rows['Sales_Volume'].rolling(window=7).std().iloc[-1]
+        row['Sales_Rolling_7_min'] = last_rows['Sales_Volume'].rolling(window=7).min().iloc[-1]
+        row['Sales_Rolling_7_max'] = last_rows['Sales_Volume'].rolling(window=7).max().iloc[-1]
+        # Cumulative sum
+        row['YTD_Sales'] = last_rows['Sales_Volume'].sum() + row['Sales_Lag_1']
+        # Interaction features
+        row['Promo_x_Price'] = row['Promotion'] * row['Price']
+        row['Promo_x_Store_Urban'] = row['Promotion'] * row.get('Store_Location_Urban', 0)
+        # Keep categorical dummies
+        for col in X.columns:
+            if col not in row.columns:
+                row[col] = last_rows.iloc[-1][col]
+        pred = model.predict(row[X.columns])[0]
+        row['Sales_Volume'] = pred
+        last_rows = pd.concat([last_rows, row], ignore_index=True)
+        last_rows = last_rows.iloc[1:]  # Keep last 14
+        future_preds.append(pred)
+        future_dates.append(next_date)
+    forecast_df = pd.DataFrame({'Date': future_dates, 'Forecasted_Sales': future_preds})
+    st.line_chart(forecast_df.set_index('Date'))
+    csv = forecast_df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label='Download Forecast as CSV',
+        data=csv,
+        file_name='sales_forecast.csv',
+        mime='text/csv'
+    )
+
+    # --- Model Explainability: Feature Importance ---
+    st.subheader('Feature Importance (XGBoost)')
+    importances = model.feature_importances_
+    feat_imp_df = pd.DataFrame({'Feature': X.columns, 'Importance': importances}).sort_values('Importance', ascending=False)
+    fig_imp, ax_imp = plt.subplots(figsize=(8, 4))
+    sns.barplot(x='Importance', y='Feature', data=feat_imp_df.head(15), ax=ax_imp)
+    ax_imp.set_title('Top 15 Feature Importances')
+    st.pyplot(fig_imp)
+
+    # --- Model Validation: Cross-Validation and Error Metrics ---
+    st.subheader('Model Validation (Cross-Validation)')
+    from sklearn.model_selection import cross_val_score
+    from sklearn.metrics import mean_squared_error, r2_score
+    cv_mae = cross_val_score(model, X, y, cv=5, scoring='neg_mean_absolute_error')
+    cv_rmse = cross_val_score(model, X, y, cv=5, scoring='neg_root_mean_squared_error')
+    st.write(f'Cross-validated MAE: {-cv_mae.mean():.2f}')
+    st.write(f'Cross-validated RMSE: {-cv_rmse.mean():.2f}')
+
+    # --- Actual vs. Predicted Plot ---
+    st.subheader('Actual vs. Predicted Sales (Test Set)')
+    fig_pred, ax_pred = plt.subplots()
+    ax_pred.scatter(y_test, y_pred, alpha=0.5)
+    ax_pred.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
+    ax_pred.set_xlabel('Actual Sales')
+    ax_pred.set_ylabel('Predicted Sales')
+    ax_pred.set_title('Actual vs. Predicted Sales')
+    st.pyplot(fig_pred)
+
+    # --- Error Metrics Table ---
+    st.subheader('Error Metrics (Test Set)')
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    r2 = r2_score(y_test, y_pred)
+    st.write(pd.DataFrame({
+        'MAE': [mae],
+        'RMSE': [rmse],
+        'R2': [r2]
+    }))
