@@ -201,3 +201,91 @@ if uploaded_file:
         'RMSE': [rmse],
         'R2': [r2]
     }))
+
+    # --- Advanced Visualizations ---
+    st.header('Advanced Visualizations')
+
+    # 1. Seasonality Heatmap (Sales by Day of Week and Month)
+    st.subheader('Seasonality Heatmap (Day of Week vs. Month)')
+    df['Date'] = pd.to_datetime(df['Date'])
+    df['Month'] = df['Date'].dt.month
+    df['DayOfWeek'] = df['Date'].dt.dayofweek
+    pivot = df.pivot_table(index='DayOfWeek', columns='Month', values='Sales_Volume', aggfunc='mean')
+    fig_season, ax_season = plt.subplots(figsize=(8, 4))
+    sns.heatmap(pivot, annot=True, fmt='.0f', cmap='YlGnBu', ax=ax_season)
+    ax_season.set_title('Average Sales by Day of Week and Month')
+    ax_season.set_xlabel('Month')
+    ax_season.set_ylabel('Day of Week (0=Mon)')
+    st.pyplot(fig_season)
+    st.download_button('Download Seasonality Heatmap', data=fig_season_to_bytes(fig_season), file_name='seasonality_heatmap.png', mime='image/png')
+
+    # 2. Promotion Impact Plot (if Promotion column exists)
+    if 'Promotion' in df.columns:
+        st.subheader('Promotion Impact on Sales')
+        fig_promo, ax_promo = plt.subplots()
+        sns.boxplot(x='Promotion', y='Sales_Volume', data=df, ax=ax_promo)
+        ax_promo.set_title('Sales Distribution by Promotion')
+        st.pyplot(fig_promo)
+        st.download_button('Download Promotion Impact Plot', data=fig_season_to_bytes(fig_promo), file_name='promotion_impact.png', mime='image/png')
+
+    # 3. Rolling Average Plot
+    st.subheader('Sales Volume with 7-Day Rolling Average')
+    fig_roll, ax_roll = plt.subplots()
+    df_sorted = df.sort_values('Date')
+    ax_roll.plot(df_sorted['Date'], df_sorted['Sales_Volume'], label='Daily Sales')
+    ax_roll.plot(df_sorted['Date'], df_sorted['Sales_Volume'].rolling(window=7).mean(), label='7-Day Rolling Mean', color='orange')
+    ax_roll.set_ylabel('Sales Volume')
+    ax_roll.set_title('Sales Volume and Rolling Average')
+    ax_roll.legend()
+    st.pyplot(fig_roll)
+    st.download_button('Download Rolling Average Plot', data=fig_season_to_bytes(fig_roll), file_name='rolling_average.png', mime='image/png')
+
+    # 4. Category/Location Trends Over Time
+    st.subheader('Sales by Product Category Over Time')
+    if 'Product_Category' in df.columns:
+        fig_cat, ax_cat = plt.subplots()
+        for cat in df['Product_Category'].unique():
+            sub = df[df['Product_Category'] == cat]
+            ax_cat.plot(sub['Date'], sub['Sales_Volume'], label=cat)
+        ax_cat.set_title('Sales by Product Category Over Time')
+        ax_cat.set_ylabel('Sales Volume')
+        ax_cat.legend()
+        st.pyplot(fig_cat)
+        st.download_button('Download Category Trends', data=fig_season_to_bytes(fig_cat), file_name='category_trends.png', mime='image/png')
+
+    st.subheader('Sales by Store Location Over Time')
+    if 'Store_Location' in df.columns:
+        fig_loc, ax_loc = plt.subplots()
+        for loc in df['Store_Location'].unique():
+            sub = df[df['Store_Location'] == loc]
+            ax_loc.plot(sub['Date'], sub['Sales_Volume'], label=loc)
+        ax_loc.set_title('Sales by Store Location Over Time')
+        ax_loc.set_ylabel('Sales Volume')
+        ax_loc.legend()
+        st.pyplot(fig_loc)
+        st.download_button('Download Location Trends', data=fig_season_to_bytes(fig_loc), file_name='location_trends.png', mime='image/png')
+
+    # 5. Outlier Detection Plot (optional)
+    st.subheader('Outlier Detection in Sales Volume')
+    q1 = df['Sales_Volume'].quantile(0.25)
+    q3 = df['Sales_Volume'].quantile(0.75)
+    iqr = q3 - q1
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+    outliers = df[(df['Sales_Volume'] < lower) | (df['Sales_Volume'] > upper)]
+    fig_out, ax_out = plt.subplots()
+    ax_out.plot(df['Date'], df['Sales_Volume'], label='Sales')
+    ax_out.scatter(outliers['Date'], outliers['Sales_Volume'], color='red', label='Outliers')
+    ax_out.set_title('Sales Volume with Outliers Highlighted')
+    ax_out.set_ylabel('Sales Volume')
+    ax_out.legend()
+    st.pyplot(fig_out)
+    st.download_button('Download Outlier Plot', data=fig_season_to_bytes(fig_out), file_name='outlier_plot.png', mime='image/png')
+
+# --- Utility function for figure download ---
+def fig_season_to_bytes(fig):
+    import io
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight')
+    buf.seek(0)
+    return buf.read()
